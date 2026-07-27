@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.14,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "generic_cke_py"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+dependencies = ["zarr>=3.2.1"]
+
+[dependency-groups]
+dev = [
+    "maturin-import-hook",
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "pytest-benchmark>=5.2.3",
+    "ruff>=0.15.22",
+]
+
+[tool.maturin]
+python-source = "python"
+exclude = ["**/__pycache__", "**/*.pyc", "**/*.pyo"]
+module-name = "generic_cke_py._generic_cke_py"

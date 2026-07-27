@@ -1,0 +1,256 @@
+use regex::Regex;
+use std::collections::BTreeMap;
+use std::fmt::Write;
+use std::{str::FromStr, sync::LazyLock};
+
+#[cfg(feature = "zarrs")]
+pub mod zarrs;
+
+/// - group 1: everything inside the `{...}`
+/// - group 2: the index or *
+/// - group 3: the optional `:0N` part
+const PATTERN: &str = r#"\{((\*|-?\d+)(:0(\d+))?)\}"#;
+
+static MATCHER: LazyLock<Regex> = LazyLock::new(|| Regex::new(PATTERN).unwrap());
+
+#[derive(Debug, Clone)]
+enum Part {
+    String(String),
+    Index { idx: usize, pad: usize },
+    NegIndex { idx: isize, pad: usize },
+    CatchAll { pad: usize },
+}
+
+impl Part {
+    fn string(s: impl Into<String>) -> Self {
+        Self::String(s.into())
+    }
+
+    fn padded_to(&self) -> usize {
+        match self {
+            Part::Index { pad, .. } => *pad,
+            Part::NegIndex { pad, .. } => *pad,
+            Part::CatchAll { pad } => *pad,
+            Part::String(_s) => 0,
+        }
+    }
+}
+
+impl From<isize> for Part {
+    fn from(index: isize) -> Self {
+        if index < 0 {
+            Self::NegIndex { idx: index, pad: 0 }
+        } else {
+            Self::Index {
+                idx: index as usize,
+                pad: 0,
+            }
+        }
+    }
+}
+
+fn parse_pad(s: &str) -> Result<usize, String> {
+    if !s.starts_with('0') {
+        return Err("Expected `0` after `:` for padding".into());
+    }
+    s[1..]
+        .parse::<usize>()
+        .map_err(|_| format!("Invalid padding value: {s}"))
+}
+
+impl FromStr for Part {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (idx_str, pad) = if let Some((pre, post)) = s.split_once(':') {
+            (pre, parse_pad(post)?)
+        } else {
+            (s, 0)
+        };
+        if idx_str == "*" {
+            Ok(Part::CatchAll { pad })
+        } else if idx_str.starts_with('-') {
+            Ok(Part::NegIndex {
+                idx: idx_str
+                    .parse::<isize>()
+                    .map_err(|_| format!("Invalid negative index: {}", idx_str))?,
+                pad,
+            })
+        } else {
+            Ok(Part::Index {
+                idx: idx_str
+                    .parse::<usize>()
+                    .map_err(|_| format!("Invalid index: {}", idx_str))?,
+                pad,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Interpolator {
+    parts: Vec<Part>,
+    pad_by_idx: BTreeMap<isize, usize>,
+    sep: String,
+    strs_len: usize,
+    max_pad: usize,
+}
+
+impl Interpolator {
+    pub fn try_new(fmt: &str, sep: Option<impl Into<String>>) -> Result<Self, String> {
+        let mut parts = Vec::new();
+
+        let mut pad_by_idx = BTreeMap::default();
+        let mut last_byte: usize = 0;
+        let mut has_catchall = false;
+        let mut strs_len: usize = 0;
+        let mut max_pad: usize = 0;
+
+        for cap in MATCHER.captures_iter(fmt) {
+            let overall = cap.get_match();
+            if overall.start() > last_byte {
+                let literal = &fmt[last_byte..overall.start()];
+                strs_len += literal.len();
+
+                parts.push(Part::string(literal));
+            }
+            let part_str = cap.get(1).unwrap().as_str();
+            let part = Part::from_str(part_str)?;
+            max_pad = max_pad.max(part.padded_to());
+            match part {
+                Part::Index { idx, pad } => {
+                    max_pad = max_pad.max(pad);
+                    if pad_by_idx.insert(idx as isize, pad).is_some() {
+                        return Err(format!("Index {idx} is already used"));
+                    }
+                }
+                Part::NegIndex { idx, pad } => {
+                    max_pad = max_pad.max(pad);
+                    if pad_by_idx.insert(idx, pad).is_some() {
+                        return Err(format!("Index {idx} is already used"));
+                    }
+                }
+                Part::CatchAll { pad } => {
+                    if sep.is_none() {
+                        return Err("Catch-all part requires a separator".into());
+                    }
+                    max_pad = max_pad.max(pad);
+                    if has_catchall {
+                        return Err("Cannot have multiple catch-all parts".into());
+                    }
+                    has_catchall = true;
+                }
+                Part::String(_) => {}
+            }
+            parts.push(part);
+            last_byte = overall.end();
+        }
+
+        Ok(Self {
+            parts,
+            pad_by_idx,
+            sep: sep.map(Into::into).unwrap_or_default(),
+            strs_len,
+            max_pad,
+        })
+    }
+
+    pub fn has_catchall(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|p| matches!(p, Part::CatchAll { .. }))
+    }
+
+    /// Suggest a length (in bytes) for the string buffer to allocate in [Self::interpolate].
+    fn buf_len(&self, chunk_idx: &[u64]) -> usize {
+        let max_digits = chunk_idx
+            .iter()
+            .max()
+            .map(|i| if i > &0 { i.ilog10() + 1 } else { 1 })
+            .unwrap_or(0) as usize;
+        max_digits.max(self.max_pad) * chunk_idx.len()
+            + self.strs_len
+            + (chunk_idx.len().saturating_sub(self.pad_by_idx.len()) - 1) * self.sep.len()
+    }
+
+    pub fn interpolate(&self, chunk_idx: &[u64]) -> Result<String, String> {
+        let mut out = String::with_capacity(self.buf_len(chunk_idx));
+
+        for part in &self.parts {
+            match part {
+                Part::String(s) => out.push_str(s),
+                Part::Index { idx, pad } => {
+                    let arg = chunk_idx
+                        .get(*idx)
+                        .ok_or_else(|| format!("Index {idx} is out of bounds"))?;
+                    write!(out, "{arg:0pad$}", pad = pad).map_err(|e| e.to_string())?;
+                }
+                Part::NegIndex { idx, pad } => {
+                    let pos_idx = chunk_idx.len() as isize + idx;
+
+                    if pos_idx >= 0 {
+                        let arg = chunk_idx
+                            .get(pos_idx as usize)
+                            .ok_or_else(|| format!("Index {idx} is out of bounds"))?;
+                        write!(out, "{arg:0pad$}", pad = pad).map_err(|e| e.to_string())?;
+                    } else {
+                        return Err(format!("Negative index {idx} is out of bounds"));
+                    }
+                }
+                Part::CatchAll { pad } => {
+                    let mut first = true;
+                    for (i, arg) in chunk_idx.iter().enumerate() {
+                        let neg_arg = i as isize - chunk_idx.len() as isize;
+                        if self.pad_by_idx.contains_key(&neg_arg)
+                            || self.pad_by_idx.contains_key(&(i as isize))
+                        {
+                            continue;
+                        }
+                        if first {
+                            first = false;
+                        } else {
+                            out.push_str(&self.sep);
+                        }
+                        write!(out, "{arg:0pad$}", pad = pad).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
+
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub const FORMAT: &str = "potato{0}-{2}/{4:03}_{*},{-1}";
+
+    #[test]
+    fn can_compile_regex() {
+        Regex::new(PATTERN).unwrap();
+    }
+
+    #[test]
+    fn can_use_lazylock() {
+        let _matcher: &Regex = &MATCHER;
+    }
+
+    fn make_interp() -> Interpolator {
+        Interpolator::try_new(FORMAT, Some(":")).unwrap()
+    }
+
+    #[test]
+    fn can_instantiate() {
+        let interpolator = make_interp();
+        assert_eq!(interpolator.parts.len(), 10);
+    }
+
+    #[test]
+    fn can_interpolate() {
+        let interpolator = make_interp();
+        let result = interpolator.interpolate(&[0, 1, 2, 3, 4, 5, 6]).unwrap();
+        assert_eq!(result, "potato0-2/004_1:3:5,6");
+    }
+}
