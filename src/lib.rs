@@ -1,20 +1,15 @@
-use regex::Regex;
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::{str::FromStr, sync::LazyLock};
+use std::str::FromStr;
+
+use crate::parser::parse_parts;
+pub mod parser;
 
 #[cfg(feature = "zarrs")]
 pub mod zarrs;
 
-/// - group 1: everything inside the `{...}`
-/// - group 2: the index or *
-/// - group 3: the optional `:0N` part
-const PATTERN: &str = r#"\{((\*|-?\d+)(:0(\d+))?)\}"#;
-
-static MATCHER: LazyLock<Regex> = LazyLock::new(|| Regex::new(PATTERN).unwrap());
-
-#[derive(Debug, Clone)]
-enum Part {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Part {
     String(String),
     Index { idx: usize, pad: usize },
     NegIndex { idx: isize, pad: usize },
@@ -22,10 +17,6 @@ enum Part {
 }
 
 impl Part {
-    fn string(s: impl Into<String>) -> Self {
-        Self::String(s.into())
-    }
-
     fn padded_to(&self) -> usize {
         match self {
             Part::Index { pad, .. } => *pad,
@@ -98,35 +89,31 @@ pub struct Interpolator {
 
 impl Interpolator {
     pub fn try_new(fmt: &str, sep: Option<impl Into<String>>) -> Result<Self, String> {
-        let mut parts = Vec::new();
+        let parts = parse_parts(fmt)?;
+        Self::from_parts(parts, sep)
+    }
 
+    pub(crate) fn from_parts(
+        parts: Vec<Part>,
+        sep: Option<impl Into<String>>,
+    ) -> Result<Self, String> {
         let mut pad_by_idx = BTreeMap::default();
-        let mut last_byte: usize = 0;
         let mut has_catchall = false;
         let mut strs_len: usize = 0;
         let mut max_pad: usize = 0;
 
-        for cap in MATCHER.captures_iter(fmt) {
-            let overall = cap.get_match();
-            if overall.start() > last_byte {
-                let literal = &fmt[last_byte..overall.start()];
-                strs_len += literal.len();
-
-                parts.push(Part::string(literal));
-            }
-            let part_str = cap.get(1).unwrap().as_str();
-            let part = Part::from_str(part_str)?;
+        for part in &parts {
             max_pad = max_pad.max(part.padded_to());
             match part {
                 Part::Index { idx, pad } => {
-                    max_pad = max_pad.max(pad);
-                    if pad_by_idx.insert(idx as isize, pad).is_some() {
+                    max_pad = max_pad.max(*pad);
+                    if pad_by_idx.insert(*idx as isize, *pad).is_some() {
                         return Err(format!("Index {idx} is already used"));
                     }
                 }
                 Part::NegIndex { idx, pad } => {
-                    max_pad = max_pad.max(pad);
-                    if pad_by_idx.insert(idx, pad).is_some() {
+                    max_pad = max_pad.max(*pad);
+                    if pad_by_idx.insert(*idx, *pad).is_some() {
                         return Err(format!("Index {idx} is already used"));
                     }
                 }
@@ -134,16 +121,16 @@ impl Interpolator {
                     if sep.is_none() {
                         return Err("Catch-all part requires a separator".into());
                     }
-                    max_pad = max_pad.max(pad);
+                    max_pad = max_pad.max(*pad);
                     if has_catchall {
                         return Err("Cannot have multiple catch-all parts".into());
                     }
                     has_catchall = true;
                 }
-                Part::String(_) => {}
+                Part::String(s) => {
+                    strs_len += s.len();
+                }
             }
-            parts.push(part);
-            last_byte = overall.end();
         }
 
         Ok(Self {
@@ -224,17 +211,22 @@ impl Interpolator {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    pub const FORMAT: &str = "potato{0}-{2}/{4:03}_{*},{-1}suffix";
 
-    pub const FORMAT: &str = "potato{0}-{2}/{4:03}_{*},{-1}";
-
-    #[test]
-    fn can_compile_regex() {
-        Regex::new(PATTERN).unwrap();
-    }
-
-    #[test]
-    fn can_use_lazylock() {
-        let _matcher: &Regex = &MATCHER;
+    pub fn expected() -> Vec<Part> {
+        vec![
+            Part::String("potato".into()),
+            Part::Index{idx: 0, pad: 0},
+            Part::String("-".into()),
+            Part::Index{idx: 2, pad: 0},
+            Part::String("/".into()),
+            Part::Index{idx: 4, pad:3},
+            Part::String("_".into()),
+            Part::CatchAll {pad: 0},
+            Part::String(",".into()),
+            Part::NegIndex {idx: -1, pad: 0},
+            Part::String("suffix".into()),
+        ]
     }
 
     fn make_interp() -> Interpolator {
@@ -244,13 +236,13 @@ pub(crate) mod tests {
     #[test]
     fn can_instantiate() {
         let interpolator = make_interp();
-        assert_eq!(interpolator.parts.len(), 10);
+        assert_eq!(interpolator.parts, expected());
     }
 
     #[test]
     fn can_interpolate() {
         let interpolator = make_interp();
         let result = interpolator.interpolate(&[0, 1, 2, 3, 4, 5, 6]).unwrap();
-        assert_eq!(result, "potato0-2/004_1:3:5,6");
+        assert_eq!(result, "potato0-2/004_1:3:5,6suffix");
     }
 }

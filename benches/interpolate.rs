@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use generic_cke::Interpolator;
 use std::hint::black_box;
 
-const FORMAT: &str = "potato${0}-${2}/${  4 :0 3 }_${ * },${-1}";
+const FORMAT: &str = "potato{0}-{2}/${4:03}_{*},{-1}suffix";
 const CHUNK_IDX: &[u64] = &[0, 1, 2, 3, 4, 5, 6];
 
 fn bench_build(c: &mut Criterion) {
