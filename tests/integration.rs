@@ -14,6 +14,21 @@ pub struct TestCase {
 }
 
 impl TestCase {
+    pub fn interpolator(&self) -> Result<Interpolator, String> {
+        Interpolator::try_new(&self.template, Some(&self.separator))
+    }
+
+    pub fn run(&self) -> Result<(), String> {
+        let interpolator = self.interpolator()?;
+        let encoded = interpolator.interpolate(&self.chunk_coordinates)?;
+        assert_eq!(
+            encoded, self.encoded,
+            "Encoding mismatch for template='{}', separator='{}': expected '{}', got '{}'",
+            self.template, self.separator, self.encoded, encoded
+        );
+        Ok(())
+    }
+
     pub fn from_tsv_row(row: &str) -> Self {
         let fields: Vec<&str> = row.trim().split('\t').collect();
         if fields.len() != 5 {
@@ -66,15 +81,6 @@ fn test_tsv_cases() {
 #[test]
 fn test_interpolator_encoding() {
     for test_case in TEST_CASES.iter() {
-        let interpolator = Interpolator::try_new(&test_case.template, Some(&test_case.separator))
-            .expect("Failed to create interpolator");
-        let encoded = interpolator
-            .interpolate(&test_case.chunk_coordinates)
-            .expect("Failed to encode chunk coordinates");
-        assert_eq!(
-            encoded, test_case.encoded,
-            "Encoding mismatch for template: {}",
-            test_case.template
-        );
+        test_case.run().unwrap()
     }
 }
