@@ -1,0 +1,21 @@
+_:
+    just --list
+
+test:
+    cargo test --all-features
+    uv run pytest -v
+
+bench:
+    cargo bench --all-features
+    uv run pytest -v --benchmark-only
+
+format:
+    cargo fmt --all
+    uv run ruff format
+    uv run ruff check --fix
+
+lint:
+    cargo clippy --all-features --all-targets -- -D warnings
+    uv run ruff check
+    uv run mypy python
+

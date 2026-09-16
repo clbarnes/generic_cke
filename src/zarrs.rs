@@ -140,12 +140,15 @@ mod tests {
         )
         .expect("failed to serialize typed configuration");
         let json = serde_json::to_value(&meta).expect("failed to serialize metadata");
-        let expected_json = serde_json::json!({
+        let expected_json = serde_json::json!(
+            {
                 "name": "generic",
                 "configuration": {
                     "format": FORMAT,
-                    "separator": ":"}
-        });
+                    "separator": ":"
+                }
+            }
+        );
         assert_eq!(json, expected_json);
     }
 }

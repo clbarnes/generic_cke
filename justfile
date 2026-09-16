@@ -3,4 +3,12 @@ _:
 
 test:
     cargo test --all-features
-    pytest -v bindings/python
+
+bench:
+    cargo bench --all-features
+
+format:
+    cargo fmt --all
+
+lint:
+    cargo clippy --all-features --all-targets -- -D warnings
