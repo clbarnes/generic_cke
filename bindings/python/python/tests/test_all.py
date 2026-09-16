@@ -10,7 +10,7 @@ def test_sum_as_string():
 
     cke = GenericChunkKeyEncoding(FORMAT, SEPARATOR)
     encoded = cke.encode_chunk_key((0, 1, 2, 3, 4, 5, 6))
-    assert encoded == "potato0-2/004_1:3:5,6"
+    assert encoded == "potato0-2/004_1:3:5,6suffix"
 
 
 def test_from_dict():
