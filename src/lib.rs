@@ -157,7 +157,7 @@ impl Interpolator {
             .unwrap_or(0) as usize;
         max_digits.max(self.max_pad) * chunk_idx.len()
             + self.strs_len
-            + (chunk_idx.len().saturating_sub(self.pad_by_idx.len()) - 1) * self.sep.len()
+            + (chunk_idx.len().saturating_sub(self.pad_by_idx.len() + 1)) * self.sep.len()
     }
 
     pub fn interpolate(&self, chunk_idx: &[u64]) -> Result<String, String> {
