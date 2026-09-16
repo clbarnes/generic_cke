@@ -216,15 +216,15 @@ pub(crate) mod tests {
     pub fn expected() -> Vec<Part> {
         vec![
             Part::String("potato".into()),
-            Part::Index{idx: 0, pad: 0},
+            Part::Index { idx: 0, pad: 0 },
             Part::String("-".into()),
-            Part::Index{idx: 2, pad: 0},
+            Part::Index { idx: 2, pad: 0 },
             Part::String("/".into()),
-            Part::Index{idx: 4, pad:3},
+            Part::Index { idx: 4, pad: 3 },
             Part::String("_".into()),
-            Part::CatchAll {pad: 0},
+            Part::CatchAll { pad: 0 },
             Part::String(",".into()),
-            Part::NegIndex {idx: -1, pad: 0},
+            Part::NegIndex { idx: -1, pad: 0 },
             Part::String("suffix".into()),
         ]
     }
