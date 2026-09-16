@@ -23,7 +23,7 @@ impl TestCase {
         let encoded = interpolator.interpolate(&self.chunk_coordinates)?;
         assert_eq!(
             encoded, self.encoded,
-            "Encoding mismatch for template='{}', separator='{}': expected '{}', got '{}'",
+            "Encoding mismatch for template='{}', separator='{}':\n  expected: '{}'\n       got: '{}'",
             self.template, self.separator, self.encoded, encoded
         );
         Ok(())
